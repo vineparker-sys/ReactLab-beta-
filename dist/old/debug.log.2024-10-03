@@ -1,0 +1,4 @@
+2024-10-03 15:27:40,165 - DEBUG - Etapa atual: Menu Principal
+2024-10-03 15:30:59,168 - ERROR - Erro ao abrir a porta serial COM12: (5, 'CreateFile', 'Access is denied.')
+2024-10-03 15:30:59,168 - ERROR - Ocorreu um erro: Erro ao abrir a porta serial. Verifique a conexão.
+2024-10-03 15:30:59,170 - DEBUG - Etapa atual: Menu Principal
