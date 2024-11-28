@@ -1,9 +1,0 @@
-2024-10-16 09:51:27,963 - INFO - Etapa atual: Menu Principal
-2024-10-16 09:51:51,475 - INFO - Usuário escolheu a duração de [bold red]30 segundos[/bold red].
-2024-10-16 09:51:51,475 - INFO - Tentando abrir a porta serial: COM12
-2024-10-16 09:51:51,475 - ERROR - Erro ao abrir a porta serial COM12: could not open port 'COM12': FileNotFoundError(2, 'The system cannot find the file specified.', None, 2)
-2024-10-16 09:51:51,476 - ERROR - Ocorreu um erro: Erro ao abrir a porta serial. Verifique a conexão.
-Traceback (most recent call last):
-  File "main.py", line 174, in main
-Exception: Erro ao abrir a porta serial. Verifique a conexão.
-2024-10-16 09:52:18,254 - INFO - Etapa atual: Menu Principal
