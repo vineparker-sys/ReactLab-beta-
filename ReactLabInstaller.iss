@@ -37,6 +37,10 @@ Source: "release_build\themes\*"; DestDir: "{app}\themes"; Flags: ignoreversion 
 [Icons]
 Name: "{group}\ReactLab"; Filename: "{app}\ReactLab.exe"; IconFilename: "{app}\assets\logo.ico"
 Name: "{group}\Desinstalar ReactLab"; Filename: "{uninstallexe}"
+Name: "{commondesktop}\ReactLab"; Filename: "{app}\ReactLab.exe"; IconFilename: "{app}\assets\logo.ico"; Tasks: desktopicon
+
+[Tasks]
+Name: "desktopicon"; Description: "Criar atalho na Área de Trabalho para todos os usuários"; GroupDescription: "Atalhos"
 
 [Run]
 ; Executar o aplicativo após a instalação (opcional)

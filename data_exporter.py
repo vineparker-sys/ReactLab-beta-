@@ -1,152 +1,157 @@
-#data_exporter.py
+# data_exporter.py
 
 import os
 import pandas as pd
-import logging
 import xlsxwriter
-import datetime
-import ctypes
-from ctypes import wintypes
-import string
+from utils import formatar_tempo
+import getpass  # Para obter o nome do usuário
+import numpy as np
 
 class ExportadorDados:
-    """Exporta os dados coletados para um arquivo Excel, incluindo formatações e cálculos, e protege o arquivo com senha."""
-
-    def __init__(self, dados, codigos_amostras, tipo_analise):
-        """Inicializa o exportador com os dados, códigos das amostras e tipo de análise."""
-        self.dados = dados
-        self.codigos_amostras = codigos_amostras
+    def __init__(self, dados, codigos_amostras_vars, intervalo_registro, planta_selecionada, tipo_analise="comum"):
+        self.dados = dados  # Lista de tuplas (elapsed_time, temperatures dict)
+        self.codigos_amostras_vars = codigos_amostras_vars  # Dicionário de IDs das amostras
+        self.intervalo_registro = intervalo_registro  # Intervalo de registro em segundos
+        self.planta_selecionada = planta_selecionada  # Nome da planta selecionada
         self.tipo_analise = tipo_analise
 
-    def formatar_tempo_excel(self, segundos):
-        """Formata o tempo em mm:ss para exibição no Excel."""
-        minutos = segundos // 60
-        segundos_restantes = segundos % 60
-        return f"{int(minutos):02d}:{int(segundos_restantes):02d}"
+    def exportar_para_excel(self, save_path=None, filename=None):
+        """
+        Exporta os dados para um arquivo Excel.
+        """
+        # Verificar termopares ativos com IDs de amostras
+        active_termopares = [tp for tp, id_amostra in self.codigos_amostras_vars.items() if id_amostra.strip()]
+        if not active_termopares:
+            raise ValueError("Nenhum termopar ativo com IDs de amostras.")
 
-    def exportar_para_excel(self):
-        """Exporta os dados para um arquivo Excel, aplicando formatações, calculando o delta T e protegendo a planilha com senha."""
-        # Determinar termopares ativos
-        termopares_ativos = set()
-        for _, temperaturas in self.dados:
-            for termopar, temp in temperaturas.items():
-                termopares_ativos.add(termopar)
+        # Construir um DataFrame com Tempo e Temperaturas
+        data = {'Tempo': []}
+        for tp in active_termopares:
+            data[tp] = []
 
-        if not termopares_ativos:
-            print("Nenhum termopar ativo foi detectado para exportação.")
-            return
+        # Filtrar os dados para incluir apenas os tempos no intervalo de registro
+        tempos_registro = set()
+        current_time = 0
+        tempo_total = self.dados[-1][0]  # Último tempo registrado
+        while current_time <= tempo_total:
+            tempos_registro.add(current_time)
+            current_time += self.intervalo_registro
 
-        # Criar DataFrame com o tempo formatado
-        df = pd.DataFrame({"Tempo": [self.formatar_tempo_excel(t[0]) for t in self.dados]})
+        # Garantir que o tempo 0 esteja incluído
+        tempos_registro.add(0)
 
-        # Adicionar as temperaturas ao DataFrame
-        for termopar in sorted(termopares_ativos):
-            df[termopar] = [
-                float(dado[1][termopar].split()[0]) if dado[1][termopar] != 'OFF' else None
-                for dado in self.dados
-            ]
-
-        # Nome do arquivo com o código da amostra e timestamp
-        # Se houver apenas um código de amostra, usamos ele; caso contrário, indicamos 'Multiplas_Amostras'
-        codigos = set(self.codigos_amostras.values())
-        if len(codigos) == 1:
-            codigo_amostra = codigos.pop()
-        else:
-            codigo_amostra = "Multiplas_Amostras"
-
-        # Sanitizar o código da amostra para remover caracteres inválidos
-        valid_chars = f"-_.() {string.ascii_letters}{string.digits}"
-        codigo_amostra_sanitizado = ''.join(c for c in codigo_amostra if c in valid_chars)
-
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-
-        # Determinar o caminho para a área de trabalho do usuário de forma confiável
-        CSIDL_DESKTOP = 0
-        SHGFP_TYPE_CURRENT = 0
-
-        buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
-        ctypes.windll.shell32.SHGetFolderPathW(None, CSIDL_DESKTOP, None, SHGFP_TYPE_CURRENT, buf)
-        desktop_path = buf.value
-
-        # Nome completo do arquivo a ser salvo na área de trabalho
-        file_path = os.path.join(desktop_path, f"Amostra_{codigo_amostra_sanitizado}_{timestamp}.xlsx")
-
-        try:
-            # Exportar para Excel com XlsxWriter usando o contexto gerenciado
-            with pd.ExcelWriter(file_path, engine='xlsxwriter') as writer:
-                df.to_excel(writer, sheet_name='Dados', index=False, startrow=1, header=False)
-
-                workbook = writer.book
-                worksheet = writer.sheets['Dados']
-
-                # Proteger a planilha com senha (somente para edição)
-                worksheet.protect(password='Lhoist@2024!')
-
-                # Formatação das células
-                header_format = workbook.add_format({'bold': True, 'border': 1, 'align': 'center'})
-                cell_format = workbook.add_format({'border': 1})
-                blue_cell_format = workbook.add_format({'border': 1, 'bg_color': '#BDD7EE'})
-                time_format = workbook.add_format({'border': 1})
-
-                # Ajustar largura das colunas
-                worksheet.set_column('A:A', 10)  # Tempo
-                worksheet.set_column('B:Z', 15)  # Termopares
-
-                # Escrever cabeçalhos com formatação
-                for col_num, value in enumerate(df.columns.values):
-                    worksheet.write(1, col_num, value, header_format)
-
-                # Escrever os dados com formatação
-                for row_num in range(len(df)):
-                    for col_num in range(len(df.columns)):
-                        # Identificar T0 e Tf para aplicar o fundo azul
-                        if row_num == 0 or row_num == len(df) - 1:
-                            cell_fmt = blue_cell_format
-                        else:
-                            cell_fmt = cell_format
-
-                        cell_value = df.iloc[row_num, col_num]
-                        worksheet.write(row_num + 2, col_num, cell_value, cell_fmt)
-
-                # Calcular o delta T e inserir abaixo da tabela
-                delta_row = len(df) + 3  # Linha onde o delta T será inserido
-                worksheet.write(delta_row, 0, "Delta T (°C)", header_format)
-
-                for termopar in sorted(termopares_ativos):
-                    col_num = df.columns.get_loc(termopar)
-                    initial_temp = df[termopar].iloc[0]
-                    final_temp = df[termopar].iloc[-1]
-                    if initial_temp is not None and final_temp is not None:
-                        delta_t = final_temp - initial_temp
-                        worksheet.write(delta_row, col_num, delta_t, cell_format)
+        for elapsed_time, temps_dict in self.dados:
+            if elapsed_time in tempos_registro:
+                data['Tempo'].append(formatar_tempo(elapsed_time))
+                for tp in active_termopares:
+                    temp = temps_dict.get(tp, None)
+                    if temp is not None:
+                        try:
+                            temp_float = float(temp)
+                            data[tp].append(temp_float)
+                        except ValueError:
+                            data[tp].append(np.nan)
                     else:
-                        worksheet.write(delta_row, col_num, "N/A", cell_format)
+                        data[tp].append(np.nan)
 
-                # Inserir gráficos para cada termopar à direita da tabela
-                chart_col_position = len(df.columns) + 1  # Coluna após os dados
-                chart_row_position = 1  # Linha inicial para o gráfico
+        df = pd.DataFrame(data)
 
-                for termopar in sorted(termopares_ativos):
-                    chart = workbook.add_chart({'type': 'line'})
-                    chart.add_series({
-                        'name': termopar,
-                        'categories': ['Dados', 2, 0, len(df) + 1, 0],  # Tempo
-                        'values': ['Dados', 2, df.columns.get_loc(termopar), len(df) + 1, df.columns.get_loc(termopar)],
-                    })
-                    chart.set_title({'name': f'Curva de Temperatura - {termopar}'})
-                    chart.set_x_axis({'name': 'Tempo'})
-                    chart.set_y_axis({'name': 'Temperatura (°C)'})
-                    chart.set_size({'width': 600, 'height': 400})
+        # Calcular Delta T para cada termopar
+        delta_ts = {}
+        for tp in active_termopares:
+            delta_ts[tp] = self.calcular_delta_t(df[tp].values)
 
-                    # Inserir o gráfico à direita da tabela, com espaço entre gráficos
-                    worksheet.insert_chart(chart_row_position, chart_col_position, chart)
+        # Obter o nome do usuário logado
+        nome_usuario = getpass.getuser()
 
-                    # Ajustar a posição da linha para o próximo gráfico (espaço de 20 linhas entre gráficos)
-                    chart_row_position += 20  # Ajuste conforme necessário
+        # Definir o caminho e o nome do arquivo
+        if save_path is None:
+            save_path = os.getcwd()
+        if filename is None:
+            filename = 'Resultados_Medicao.xlsx'
+        filepath = os.path.join(save_path, filename)
 
-            print(f"Dados exportados com sucesso para {file_path}!")
-            logging.info(f"Dados exportados para {file_path}")
-            return file_path
-        except Exception as e:
-            print(f"Erro ao exportar para Excel: {e}")
-            logging.error(f"Erro ao exportar para Excel: {e}")
+        # Criar um escritor do Excel com opção para tratar NaN/Inf
+        with pd.ExcelWriter(filepath, engine='xlsxwriter', engine_kwargs={'options': {'nan_inf_to_errors': True}}) as writer:
+            # Escrever DataFrame no Excel
+            df.to_excel(writer, index=False, sheet_name='Dados', startrow=1)
+
+            # Obter o workbook e worksheet
+            workbook = writer.book
+            worksheet = writer.sheets['Dados']
+
+            # Formatações
+            header_format = workbook.add_format({'bold': True, 'align': 'center', 'border': 1})
+            cell_format = workbook.add_format({'align': 'center', 'border': 1})
+            delta_format = workbook.add_format({'align': 'left', 'border': 1, 'bold': True})
+            info_format = workbook.add_format({'align': 'left', 'border': 1})
+
+            # Aplicar formatação nos cabeçalhos
+            for col_num, value in enumerate(df.columns.values):
+                worksheet.write(1, col_num, value, header_format)
+                worksheet.set_column(col_num, col_num, 15)
+
+            # Aplicar formatação nas células de dados
+            for row_num in range(2, len(df) + 2):
+                for col_num in range(len(df.columns)):
+                    val = df.iloc[row_num - 2, col_num]
+                    if pd.isna(val):
+                        val = ''
+                    worksheet.write(row_num, col_num, val, cell_format)
+
+            # Escrever Delta T abaixo da tabela
+            delta_t_row = len(df) + 3  # Ajuste para posicionar corretamente
+            worksheet.write(delta_t_row, 0, 'Delta T:', delta_format)
+            col = 1
+            for tp in active_termopares:
+                worksheet.write(delta_t_row, col, f'{tp}: {delta_ts[tp]} °C', delta_format)
+                col += 1
+
+            # Escrever informações do usuário e planta
+            info_row = delta_t_row + 2
+            info_text = f"Análise realizada pelo usuário: '{nome_usuario}' - planta '{self.planta_selecionada}'"
+            worksheet.write(info_row, 0, info_text, info_format)
+
+            # Ajustar largura das colunas para acomodar o texto
+            worksheet.set_column(0, 0, 50)
+
+            # Proteger a planilha com senha
+            worksheet.protect('LH015Tl4b!')
+
+            # Criar um gráfico
+            chart = workbook.add_chart({'type': 'line'})
+            for tp in active_termopares:
+                col_idx = df.columns.get_loc(tp)
+                chart.add_series({
+                    'categories': ['Dados', 2, 0, len(df) + 1, 0],  # Coluna Tempo
+                    'values':     ['Dados', 2, col_idx, len(df) + 1, col_idx],  # Coluna do termopar
+                    'name':       f'{tp} - {self.codigos_amostras_vars[tp]}'
+                })
+            chart.set_title({'name': 'Curva de Reatividade'})
+            chart.set_x_axis({'name': 'Tempo'})
+            chart.set_y_axis({'name': 'Temperatura (°C)'})
+
+            # Inserir gráfico na worksheet, ao lado direito da tabela
+            chart_start_col = len(df.columns) + 2  # Coluna após os dados + espaçamento
+            worksheet.insert_chart(1, chart_start_col, chart)
+
+            # Ajustar o tamanho do gráfico para não sobrepor os dados
+            chart.set_size({'width': 600, 'height': 400})
+
+            # Ajustar zoom da planilha
+            worksheet.set_zoom(90)
+
+        return os.path.abspath(filepath)
+
+    def calcular_delta_t(self, temperatures):
+        """
+        Calcula o Delta T com base na lista de temperaturas.
+        """
+        temperaturas_validas = [temp for temp in temperatures if not np.isnan(temp)]
+        if temperaturas_validas:
+            initial_temp = temperaturas_validas[0]
+            final_temp = temperaturas_validas[-1]
+            delta_t = final_temp - initial_temp
+            return round(delta_t, 2)
+        else:
+            return 0.0

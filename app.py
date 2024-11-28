@@ -4,6 +4,7 @@ import customtkinter as ctk
 import tkinter as tk
 from tkinter import messagebox
 from tkinter import ttk
+from tkinter import filedialog
 import threading
 import time
 import logging
@@ -15,6 +16,8 @@ import os
 import getpass
 from logging.handlers import TimedRotatingFileHandler
 import sys  # For sys.exit()
+import ctypes
+from ctypes import wintypes
 
 # Importing modules from the project
 from measurement import Medicao
@@ -87,7 +90,7 @@ class ReactLabApp(ctk.CTk):
             logger.warning("Cannot maximize window using 'zoomed'. Trying 'fullscreen'.")
             self.attributes('-fullscreen', True)
         
-         # Definir o ícone da janela (barra de tarefas e topo da janela)
+        # Definir o ícone da janela (barra de tarefas e topo da janela)
         base_path = os.path.dirname(os.path.abspath(__file__))
         icon_path = os.path.join(base_path, "assets", "logo.ico")  
         if os.path.exists(icon_path):
@@ -118,6 +121,10 @@ class ReactLabApp(ctk.CTk):
 
         # Analysis State
         self.analise_em_andamento = False
+        self.termopares_verificados = False  # Flag to check if thermocouples have been verified
+
+        # Export Options
+        self.export_to_desktop = tk.BooleanVar(value=False)  # Default is False
 
         # Initialize Interface
         self.create_menu()
@@ -159,6 +166,7 @@ class ReactLabApp(ctk.CTk):
         self.menu_bar.add_cascade(label=self.localizer.translate("file_menu"), menu=self.file_menu)
         self.file_menu.add_command(label=self.localizer.translate("reset_fields"), command=self.resetar_campos)
         self.file_menu.add_command(label=self.localizer.translate("export_data"), command=self.exportar_dados)
+        self.file_menu.add_checkbutton(label=self.localizer.translate("export_to_desktop"), variable=self.export_to_desktop)
         self.file_menu.add_separator()
         self.file_menu.add_command(label=self.localizer.translate("exit"), command=self.on_closing)
 
@@ -166,6 +174,7 @@ class ReactLabApp(ctk.CTk):
         self.debug_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.menu_bar.add_cascade(label=self.localizer.translate("debug_menu"), menu=self.debug_menu)
         self.debug_menu.add_checkbutton(label=self.localizer.translate("activate_simulation"), command=self.toggle_simulacao)
+        self.debug_menu.add_command(label=self.localizer.translate("recheck_thermocouples"), command=self.rechecar_termopares)
 
         # Help Menu
         self.help_menu = tk.Menu(self.menu_bar, tearoff=0)
@@ -297,15 +306,27 @@ class ReactLabApp(ctk.CTk):
 
     def abrir_suporte(self):
         """
-        Opens a new email in Outlook to send an email to support.
+        Opens a new email in Outlook to send an email to support, attaching the log file.
         """
         try:
             outlook = win32.Dispatch('outlook.application')
             mail = outlook.CreateItem(0)
-            mail.To = 'suporte@exemplo.com'  # Substitua pelo e-mail de suporte
-            mail.CC = 'gerencia@exemplo.com'  # Substitua pelo e-mail de gerência
+            mail.To = 'vinicius.alves@lhoist.com' 
+            mail.CC = 'irae.silva@lhoist.com' 
             mail.Subject = self.localizer.translate('support_email_subject')
             mail.Body = self.localizer.translate('support_email_body')
+
+            # Attach the log file
+            username = getpass.getuser()
+            local_appdata = os.getenv('LOCALAPPDATA', os.path.expanduser('~\\AppData\\Local'))
+            log_dir = os.path.join(local_appdata, "ReactLab")
+            log_filename = os.path.join(log_dir, f"debug_{username}.log")
+            if os.path.exists(log_filename):
+                mail.Attachments.Add(Source=log_filename)
+                logger.info("Log file attached to support email.")
+            else:
+                logger.warning("Log file not found to attach.")
+
             mail.Display()
             logger.info("Outlook opened for support email.")
         except Exception as e:
@@ -404,8 +425,8 @@ class ReactLabApp(ctk.CTk):
         self.btn_resetar = ctk.CTkButton(controle_frame, text=self.localizer.translate("reset_fields"), command=self.resetar_campos, font=FONTE_PADRAO)
         self.btn_resetar.pack(pady=5, padx=10, fill="x")
 
-        # Button to Export to Excel (initially disabled)
-        self.btn_exportar = ctk.CTkButton(controle_frame, text=self.localizer.translate("export_data"), command=self.exportar_dados, state="disabled", font=FONTE_PADRAO)
+        # Button to Export to Excel (always enabled)
+        self.btn_exportar = ctk.CTkButton(controle_frame, text=self.localizer.translate("export_data"), command=self.exportar_dados, font=FONTE_PADRAO)
         self.btn_exportar.pack(pady=5, padx=10, fill="x")
 
     def create_sidebar_right(self):
@@ -628,7 +649,7 @@ class ReactLabApp(ctk.CTk):
 
     def verificar_selecao(self, *args):
         """
-        Checks if all RadioButton options are selected to enable the start button.
+        Checks if all RadioButton options are selected.
         """
         pass  # Start button is always enabled
 
@@ -636,9 +657,14 @@ class ReactLabApp(ctk.CTk):
         """
         Checks active thermocouples and enables the corresponding text boxes.
         """
+        if self.termopares_verificados:
+            messagebox.showinfo(self.localizer.translate("thermocouples_checked"), self.localizer.translate("thermocouples_already_checked"))
+            return
+
         if self.simulacao_ativa:
-            # Simulation: randomly select active thermocouples
-            self.termopares_ativos = [tp for tp in ["T1", "T2", "T3", "T4"] if random.choice([True, False])]
+            # Simulação: garantir que pelo menos um termopar esteja ativo
+            num_termopares = random.randint(1, 4)
+            self.termopares_ativos = random.sample(["T1", "T2", "T3", "T4"], k=num_termopares)
             logger.info(f"Simulação: Termopares ativos detectados: {self.termopares_ativos}")
         else:
             # Real mode: identify active thermocouples via serial port
@@ -670,16 +696,63 @@ class ReactLabApp(ctk.CTk):
                     entry_widget.configure(state="disabled")
                     var.set("")  # Clear the field
 
+        self.termopares_verificados = True
+
+        # Exibir mensagem com os termopares ativos
+        if self.termopares_ativos:
+            termopares_str = ', '.join(self.termopares_ativos)
+            messagebox.showinfo(self.localizer.translate("active_thermocouples"), f"{self.localizer.translate('active_thermocouples_detected')}: {termopares_str}")
+        else:
+            messagebox.showwarning(self.localizer.translate("no_active_thermocouples"), self.localizer.translate("no_active_thermocouples_detected"))
+
+    def rechecar_termopares(self):
+        """
+        Resets the state of thermocouples to allow rechecking.
+        """
+        self.termopares_ativos = []
+        self.termopares_verificados = False
+        # Disable all sample ID entries
+        for termopar, var in self.codigos_amostras_vars.items():
+            entry_widget = self.entry_widgets.get(termopar)
+            if entry_widget:
+                entry_widget.configure(state="disabled")
+                var.set("")
+        messagebox.showinfo(self.localizer.translate("recheck_thermocouples"), self.localizer.translate("thermocouples_reset"))
+        logger.info("Termopares resetados para nova verificação.")
+
     def iniciar_analise(self):
         """
         Starts the analysis after checking selections and confirms with the user.
         """
+        if not self.termopares_verificados:
+            messagebox.showwarning(self.localizer.translate("incomplete_fields"), self.localizer.translate("please_check_thermocouples"))
+            return
+
+        # Check if all IDs for active thermocouples are filled
+        faltando_ids = [tp for tp in self.termopares_ativos if not self.codigos_amostras_vars[tp].get().strip()]
+        if faltando_ids:
+            messagebox.showwarning(self.localizer.translate("incomplete_fields"), f"{self.localizer.translate('please_fill_ids')} {', '.join(faltando_ids)}.")
+            return
+
         if not self.analise_em_andamento:
-            # Check if all IDs for active thermocouples are filled
-            faltando_ids = [tp for tp in self.termopares_ativos if not self.codigos_amostras_vars[tp].get().strip()]
-            if faltando_ids:
-                messagebox.showwarning(self.localizer.translate("incomplete_fields"), f"{self.localizer.translate('please_fill_ids')} {', '.join(faltando_ids)}.")
-                return
+            # Collect sample IDs
+            codigos_amostras = {tp: var.get().strip() for tp, var in self.codigos_amostras_vars.items() if tp in self.termopares_ativos}
+
+            # Initialize TemperatureLogger or SimulatedTemperatureLogger
+            if self.simulacao_ativa:
+                self.temp_logger_simulado = SimulatedTemperatureLogger(self.termopares_ativos)
+                self.temp_logger_simulado.start()
+                temperature_logger_instance = self.temp_logger_simulado
+            else:
+                # Use the real TemperatureLogger
+                manipulador_serial = ManipuladorPortaSerial("COM12")  # Replace "COM12" with the correct port
+                if not manipulador_serial.abrir():
+                    messagebox.showerror(self.localizer.translate("error"), self.localizer.translate("cannot_open_serial_port"))
+                    self.status_label.configure(text=f"{self.localizer.translate('status')}: {self.localizer.translate('waiting')}")
+                    return
+                canal_para_termopar = {"41": "T1", "42": "T2", "43": "T3", "44": "T4"}
+                temperature_logger_instance = TemperatureLogger(manipulador_serial, self.termopares_ativos, canal_para_termopar)
+                temperature_logger_instance.start()
 
             # Confirm with the user before starting
             nomes_amostras = ", ".join([f"ID {tp}: {var.get().strip()}" for tp, var in self.codigos_amostras_vars.items() if tp in self.termopares_ativos])
@@ -690,8 +763,6 @@ class ReactLabApp(ctk.CTk):
             if resposta:
                 logger.info("Usuário confirmou o início da medição.")
                 self.analise_em_andamento = True
-                self.btn_iniciar.configure(state="disabled")
-                self.btn_exportar.configure(state="disabled")
                 self.status_label.configure(text=f"{self.localizer.translate('status')}: {self.localizer.translate('analyzing')}...")
 
                 # Reset graphs and tables before starting
@@ -702,11 +773,17 @@ class ReactLabApp(ctk.CTk):
                 self.progress_bar.pack(side="left", padx=20, pady=10, fill="x", expand=True)
                 self.btn_interromper.pack(side="right", padx=20)
 
-                self.iniciar_medicao()
+                self.iniciar_medicao(temperature_logger_instance, codigos_amostras)
             else:
+                # Stop the TemperatureLogger if user cancels
+                if self.simulacao_ativa and hasattr(self, 'temp_logger_simulado'):
+                    self.temp_logger_simulado.parar()
+                elif hasattr(temperature_logger_instance, 'manipulador_serial'):
+                    temperature_logger_instance.parar()
+                    temperature_logger_instance.manipulador_serial.fechar()
                 logger.info("Usuário cancelou o início da medição.")
 
-    def iniciar_medicao(self):
+    def iniciar_medicao(self, temperature_logger_instance, codigos_amostras):
         """
         Starts the measurement in a separate thread.
         """
@@ -715,28 +792,6 @@ class ReactLabApp(ctk.CTk):
         # Reset graph and table before starting
         self.resetar_grafico()
         self.resetar_tabela()
-
-        # Collect sample IDs
-        codigos_amostras = {tp: var.get().strip() for tp, var in self.codigos_amostras_vars.items() if tp in self.termopares_ativos}
-
-        # Initialize TemperatureLogger or SimulatedTemperatureLogger
-        if self.simulacao_ativa:
-            self.temp_logger_simulado = SimulatedTemperatureLogger(self.termopares_ativos)
-            self.temp_logger_simulado.start()
-            temperature_logger_instance = self.temp_logger_simulado
-        else:
-            # Use the real TemperatureLogger
-            manipulador_serial = ManipuladorPortaSerial("COM12")  # Replace "COM12" with the correct port
-            if not manipulador_serial.abrir():
-                messagebox.showerror(self.localizer.translate("error"), self.localizer.translate("cannot_open_serial_port"))
-                self.analise_em_andamento = False
-                self.btn_iniciar.configure(state="normal")
-                self.btn_exportar.configure(state="disabled")
-                self.status_label.configure(text=f"{self.localizer.translate('status')}: {self.localizer.translate('waiting')}")
-                return
-            canal_para_termopar = {"41": "T1", "42": "T2", "43": "T3", "44": "T4"}
-            temperature_logger_instance = TemperatureLogger(manipulador_serial, self.termopares_ativos, canal_para_termopar)
-            temperature_logger_instance.start()
 
         # Define measurement duration based on selection
         duracao = self.analise_duracao_selected.get()
@@ -806,6 +861,12 @@ class ReactLabApp(ctk.CTk):
         try:
             start_time = time.time()
             last_update_time = -1
+
+            # Capture initial temperatures at time 0
+            temperaturas_iniciais = self.medicao.obter_temperaturas()
+            self.dados.append((0, temperaturas_iniciais.copy()))
+            self.after(0, self.atualizar_gui, 0, temperaturas_iniciais)
+
             while True:
                 if not self.analise_em_andamento:
                     break
@@ -849,11 +910,13 @@ class ReactLabApp(ctk.CTk):
                 self.temp_logger_simulado.parar()
             elif hasattr(self.medicao, 'temp_logger'):
                 self.medicao.temp_logger.parar()
+                if hasattr(self.medicao.temp_logger, 'manipulador_serial'):
+                    self.medicao.temp_logger.manipulador_serial.fechar()
             # Hide the progress bar and interrupt button
             self.after(0, self.progress_bar.pack_forget)
             self.after(0, self.btn_interromper.pack_forget)
-            # Enable the export button
-            self.after(0, self.btn_exportar.configure, {'state': "normal"})
+            # Enable the start and export buttons
+            self.after(0, self.status_label.configure, {'text': f"{self.localizer.translate('status')}: {self.localizer.translate('waiting')}"})
 
     def atualizar_delta_t_sidebar(self, delta_t):
         """
@@ -866,21 +929,36 @@ class ReactLabApp(ctk.CTk):
         Calculates Delta T based on collected data.
         """
         if self.dados:
-            temperaturas_iniciais = []
-            temperaturas_finais = []
-            for temp in self.dados[0][1].values():
-                try:
-                    temperaturas_iniciais.append(float(temp))
-                except ValueError:
-                    temperaturas_iniciais.append(0.0)
-            for temp in self.dados[-1][1].values():
-                try:
-                    temperaturas_finais.append(float(temp))
-                except ValueError:
-                    temperaturas_finais.append(0.0)
-            delta = sum([f - i for i, f in zip(temperaturas_iniciais, temperaturas_finais)]) / len(temperaturas_iniciais)
-            return delta
+            delta_ts = []
+            for termopar in self.termopares_ativos:
+                temperaturas = []
+                for _, temps in self.dados:
+                    temp = temps.get(termopar)
+                    if temp is not None:
+                        try:
+                            temperaturas.append(float(temp))
+                        except ValueError:
+                            pass
+                if temperaturas:
+                    delta_t = temperaturas[-1] - temperaturas[0]
+                    delta_ts.append(delta_t)
+            if delta_ts:
+                # Calcula a média dos Delta Ts de todos os termopares ativos
+                delta_t_medio = sum(delta_ts) / len(delta_ts)
+                return round(delta_t_medio, 2)
         return 0.0
+
+    def get_desktop_path(self):
+        """
+        Retrieves the desktop path for the current user.
+        """
+        CSIDL_DESKTOP = 0x0000  # ID da pasta Desktop
+        SHGFP_TYPE_CURRENT = 0  # Obter o caminho atual, não padrão
+
+        buf = ctypes.create_unicode_buffer(wintypes.MAX_PATH)
+        ctypes.windll.shell32.SHGetFolderPathW(None, CSIDL_DESKTOP, None, SHGFP_TYPE_CURRENT, buf)
+
+        return buf.value
 
     def exportar_dados(self):
         """
@@ -891,11 +969,39 @@ class ReactLabApp(ctk.CTk):
                 messagebox.showwarning(self.localizer.translate("export"), self.localizer.translate("no_data_to_export"))
                 return
 
-            # Initialize ExportadorDados
-            exportador = ExportadorDados(self.dados, self.codigos_amostras_vars, tipo_analise="comum")
-            caminho_exportacao = exportador.exportar_para_excel()
+            # Obter o intervalo de registro em segundos
+            intervalo = self.intervalo_selecionado.get()
+            if intervalo == "30 segundos":
+                intervalo_segundos = 30
+            elif intervalo == "1 minuto":
+                intervalo_segundos = 60
+            else:
+                intervalo_segundos = 30  # Valor padrão
 
-            messagebox.showinfo(self.localizer.translate("export"), f"{self.localizer.translate('data_exported_successfully')} {caminho_exportacao}")
+            # Prepare sample IDs as plain strings
+            codigos_amostras = {tp: var.get().strip() for tp, var in self.codigos_amostras_vars.items()}
+
+            # Initialize ExportadorDados
+            exportador = ExportadorDados(self.dados, codigos_amostras, intervalo_segundos, self.planta_selecionada.get(), tipo_analise="comum")
+
+            if self.export_to_desktop.get():
+                # Obter o caminho da área de trabalho de forma confiável
+                desktop_path = self.get_desktop_path()
+                if not os.path.exists(desktop_path):
+                    messagebox.showerror(self.localizer.translate("error"), f"{self.localizer.translate('desktop_directory_not_found')}: {desktop_path}")
+                    return
+                caminho_exportacao = exportador.exportar_para_excel(save_path=desktop_path)
+                messagebox.showinfo(self.localizer.translate("export"), f"{self.localizer.translate('data_exported_successfully')} {caminho_exportacao}")
+            else:
+                # Ask user where to save
+                filepath = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
+                if filepath:
+                    caminho_exportacao = exportador.exportar_para_excel(save_path=os.path.dirname(filepath), filename=os.path.basename(filepath))
+                    messagebox.showinfo(self.localizer.translate("export"), f"{self.localizer.translate('data_exported_successfully')} {caminho_exportacao}")
+                else:
+                    messagebox.showinfo(self.localizer.translate("export"), self.localizer.translate("export_cancelled"))
+                    return
+
             logger.info(f"Dados exportados para {caminho_exportacao}")
         except Exception as e:
             logger.error(f"Erro ao exportar dados: {e}", exc_info=True)
@@ -908,8 +1014,6 @@ class ReactLabApp(ctk.CTk):
         self.planta_selecionada.set("São José da Lapa")
         self.intervalo_selecionado.set("30 segundos")
         self.analise_duracao_selected.set("30 segundos")
-        self.btn_iniciar.configure(state="normal")
-        self.btn_exportar.configure(state="disabled")
         self.progress_bar.set(0)
         self.status_label.configure(text=f"{self.localizer.translate('status')}: {self.localizer.translate('waiting')}")
         self.delta_label_sidebar.configure(text=f"{self.localizer.translate('delta_t')}: N/A")
@@ -924,6 +1028,10 @@ class ReactLabApp(ctk.CTk):
             if entry_widget:
                 entry_widget.configure(state="disabled")
                 var.set("")
+
+        # Reset termopares verificados
+        self.termopares_ativos = []
+        self.termopares_verificados = False
 
         # Reset data
         self.dados = []
@@ -950,6 +1058,8 @@ class ReactLabApp(ctk.CTk):
                     self.temp_logger_simulado.parar()
                 elif hasattr(self.medicao, 'temp_logger'):
                     self.medicao.temp_logger.parar()
+                    if hasattr(self.medicao.temp_logger, 'manipulador_serial'):
+                        self.medicao.temp_logger.manipulador_serial.fechar()
                 logger.info("Análise interrompida pelo usuário.")
                 messagebox.showinfo(self.localizer.translate("interrupt_analysis"), self.localizer.translate("analysis_interrupted_by_user"))
                 # Reset progress bar and status
@@ -958,8 +1068,8 @@ class ReactLabApp(ctk.CTk):
                 # Hide the progress bar and interrupt button
                 self.progress_bar.pack_forget()
                 self.btn_interromper.pack_forget()
-                # Enable the export button
-                self.btn_exportar.configure(state="normal")
+                # Reset buttons
+                self.resetar_campos()
 
     def atualizar_gui(self, tempo, temperaturas):
         """
@@ -1046,6 +1156,8 @@ class ReactLabApp(ctk.CTk):
                     self.temp_logger_simulado.parar()
                 elif hasattr(self.medicao, 'temp_logger'):
                     self.medicao.temp_logger.parar()
+                    if hasattr(self.medicao.temp_logger, 'manipulador_serial'):
+                        self.medicao.temp_logger.manipulador_serial.fechar()
                 self.destroy()
             else:
                 return
